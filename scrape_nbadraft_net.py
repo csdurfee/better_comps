@@ -5,13 +5,15 @@ Scrapes all draft related data from nbadraft.net
 import requests
 import re
 import time
+import os
+import json
 import bs4 as bs
 import pandas as pd
 
 
 yearly_url = "https://www.nbadraft.net/actual-draft/?year-mock=%s"
 CACHE_DIR = 'scrape_cache'
-PLAYER_CACHE_FILE = 'players.parquet'
+PLAYER_LIST_FILE = 'player_list.json'
 SLEEP_TIME = 2 # seconds
 
 def get_players_for_year(year):
@@ -53,15 +55,15 @@ def get_players_for_year(year):
             players.append(player_data)
     return players
 
-def get_player_cache_file():
-    return f"{CACHE_DIR}/{PLAYER_CACHE_FILE}"
+def get_player_list_file():
+    return f"{CACHE_DIR}/{PLAYER_LIST_FILE}"
 
 def save_players(player_data):
     players_df = pd.DataFrame(player_data)
-    players_df.to_parquet(get_player_cache_file())
+    players_df.to_json(get_player_list_file())
 
 def load_players():
-    return pd.read_parquet(get_player_cache_file())
+    return pd.read_json(get_player_list_file())
 
 def scrape_player_lists(start=2009, end=2025):
     all_players = []
@@ -75,11 +77,19 @@ def scrape_player_lists(start=2009, end=2025):
 
 ### player page related functions
 ### eg https://www.nbadraft.net/players/nikola-jokic/
+def get_player_filename(player_name):
+    f_name = '-'.join(player_name.split(' '))
+    return f"{CACHE_DIR}/players/{f_name}.json"
+
+def save_player(player_name, player_data):
+    with open(get_player_filename(player_name), 'w') as f:
+        json.dump(player_data, f)
+    
 def scrape_player_page(player_url):
     soup = fetch_player_page(player_url)
     player = extract_prose(soup)
-    numerics = extract_numerics(soup)
-    player.update(numerics)
+    player.update(extract_numerics(soup))
+    player.update(extract_ranks(soup))
     return player
 
 def fetch_player_page(player_url):
@@ -96,6 +106,14 @@ def extract_numerics(soup):
         parsed_attrs[attr_name] = attr_value
     return parsed_attrs
 
+def extract_ranks(soup):
+    ranks = {}
+    ranks['mock'] = soup.find(class_='attribute-mock').find(class_='value').text
+    ranks['big_board'] = soup.find(class_='attribute-big-board').find(class_='value').text
+    ranks['overall'] = soup.find(class_='attribute-overall').find(class_='value').text
+
+    return ranks
+
 def extract_prose(soup):
     analysis = soup.find(id='analysis')
 
@@ -107,12 +125,15 @@ def extract_prose(soup):
     paras = analysis.find(class_='vc_tta-panel-body').find_all(['p', 'h3'])
 
     got_comp = False
-    ## sometimes comp is not in a paragraph
 
     for p in paras:
+        # this is usually in its own paragraph
         if 'NBA Comparison:' in p.text:
-            comp_chunks = p.text.split('NBA Comparison:')
-            player['nbadraft_net_comp'] = comp_chunks[1].strip()
+            comp_chunk = p.text.split('NBA Comparison:')[1].strip()
+            if "/" in comp_chunk:
+                comps = comp_chunk.split("/")
+            else:
+                comps = [comp_chunk]
             continue
 
         if len(p.text) < 100:
@@ -134,11 +155,28 @@ def extract_prose(soup):
     player['descr_other'] = descr_other
     player['descr_strengths'] = descr_strengths
     player['descr_weaknesses'] = descr_weaknesses
-    player['descr_raw'] = analysis
+    player['descr_raw'] = str(analysis)
 
     return player
 
+
+def scrape_all_players():
+    data = load_players()
+    for idx, row in data.iterrows():
+        # see if we already have the player file
+        player_filename = get_player_filename(row.player)
+        if os.path.exists(player_filename):
+            print("already got 'em")
+        else:
+            scraped = scrape_player_page(row.player_url)
+            save_player(row.player, scraped)
+            print(f"did {row.player} from {row.year}")
+
+
 if __name__ == '__main__':
-    import pprint
-    nik = scrape_player_page("https://www.nbadraft.net/players/nikola-jokic/")
-    pprint.pprint(nik)
+    scrape_all_players()
+
+    #scrape_player_lists()
+    # import pprint
+    # player = scrape_player_page("https://www.nbadraft.net/players/marvin-bagley/")
+    # pprint.pprint(player)
