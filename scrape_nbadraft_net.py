@@ -4,17 +4,25 @@ Scrapes all draft related data from nbadraft.net
 
 import requests
 import re
+import glob
 import time
 import os
 import json
 import bs4 as bs
 import pandas as pd
+import numpy as np
 
+import career_stats
 
 yearly_url = "https://www.nbadraft.net/actual-draft/?year-mock=%s"
-CACHE_DIR = 'scrape_cache'
+CACHE_DIR = 'scrape_cache/nbadraft_net'
 PLAYER_LIST_FILE = 'player_list.json'
 SLEEP_TIME = 2 # seconds
+
+NUMERIC_FIELDS = ['Athleticism', 'Size', 'Defense', 'Strength', 'Quickness', 
+                  'Leadership', 'Jump Shot', 'NBA Ready', 'Rebounding', 'Potential',
+                  'Post Skills', 'Intangibles', 'mock', 'big_board', 'overall', 
+                  'Ball Handling', 'Passing']
 
 def get_players_for_year(year):
     """
@@ -47,7 +55,7 @@ def get_players_for_year(year):
                     player_data[attr] = cell.text.encode('ascii', 'ignore').decode().replace('*', '')
                 else:
                     player_data[attr] = cell.text
-                # pickup url to full player comp
+                # pick up URL to full player comp
                 if attr == 'player':
                     player_data['player_url'] = cell.find('a')['href']
 
@@ -81,6 +89,9 @@ def get_player_filename(player_name):
     f_name = '-'.join(player_name.split(' '))
     return f"{CACHE_DIR}/players/{f_name}.json"
 
+def get_name_from_filename(filename):
+    return filename.replace(f"{CACHE_DIR}/players", "").replace("\\", "").replace(".json", "").replace("-", " ").strip()
+
 def save_player(player_name, player_data):
     with open(get_player_filename(player_name), 'w') as f:
         json.dump(player_data, f)
@@ -108,9 +119,18 @@ def extract_numerics(soup):
 
 def extract_ranks(soup):
     ranks = {}
-    ranks['mock'] = soup.find(class_='attribute-mock').find(class_='value').text
-    ranks['big_board'] = soup.find(class_='attribute-big-board').find(class_='value').text
-    ranks['overall'] = soup.find(class_='attribute-overall').find(class_='value').text
+    possible_mock = soup.find(class_='attribute-mock').find(class_='value')
+    if possible_mock is not None:
+        ranks['mock'] = possible_mock.text
+
+    possible_big_board = soup.find(class_='attribute-big-board').find(class_='value')
+
+    if possible_big_board is not None:
+        ranks['big_board'] = possible_big_board.text
+
+    possible_overall = soup.find(class_='attribute-overall').find(class_='value')
+    if possible_overall is not None:
+        ranks['overall'] = possible_overall.text
 
     return ranks
 
@@ -128,17 +148,24 @@ def extract_prose(soup):
 
     for p in paras:
         # this is usually in its own paragraph
-        if 'NBA Comparison:' in p.text:
-            comp_chunk = p.text.split('NBA Comparison:')[1].strip()
+
+        if 'omparison:' in p.text:
+            comp_chunk = p.text.split('omparison:')[1].strip()
             if "/" in comp_chunk:
                 comps = comp_chunk.split("/")
             else:
                 comps = [comp_chunk]
+
+            player['nbadraft_net_comps'] = comps
+
             continue
 
         if len(p.text) < 100:
             pass
         else:
+            # this HTML is an unholy mess on some pages, for instance https://www.nbadraft.net/players/ty-lawson/
+            # the 'Strengths' parts aren't wrapped in <p> tags, so they don't get picked up.
+            # it would be easy enough to do sentiment analysis, or have an LLM summarize
             if 'Strengths' in p.text:
                 if 'Weaknesses' in p.text:
                     strength, weakness = p.text.split('Weaknesses')
@@ -168,13 +195,54 @@ def scrape_all_players():
         if os.path.exists(player_filename):
             print("already got 'em")
         else:
-            scraped = scrape_player_page(row.player_url)
-            save_player(row.player, scraped)
-            print(f"did {row.player} from {row.year}")
+            try:
+                scraped = scrape_player_page(row.player_url)
+                save_player(row.player, scraped)
+                print(f"did {row.player} from {row.year}")
+            except:
+                print("error on %s" % row.player_url)
+            # sleep between server requests.
+            time.sleep(SLEEP_TIME)
 
+def build_base_df():
+    """
+    Loop through all player files in the players/ directory, and build a pandas 
+    dataframe from the data.
+    """
+    player_files = glob.glob("scrape_cache/nbadraft_net/players/*.json")
+
+    players_extracted = []
+    for filename in player_files:
+        player_name = get_name_from_filename(filename)
+        with open(filename, "r") as f:
+            json_data = json.load(f)
+            # these are lists, which make pandas mad if they are different lengths.
+            # I am preserving the raw HTML. but this is primarily for numerical analysis
+            del json_data['descr_other']
+            del json_data['descr_strengths']
+            del json_data['descr_weaknesses']
+            json_data['Name'] = player_name
+            players_extracted.append(json_data)
+    df = pd.DataFrame(players_extracted)
+
+    return df
+
+def build_df():
+    df = build_base_df()
+    stats = career_stats.get_career_stats()
+
+    df = df.merge(stats, how='left', left_on="Name", right_on="player")
+
+    # fix columns that should be numeric.
+    # these appear to be all integer values.
+    # however, downcast='integer' doesn't work if there are na's.
+    df[NUMERIC_FIELDS] = df[NUMERIC_FIELDS].apply(lambda x: pd.to_numeric(x, errors='coerce', downcast='integer'))
+
+    return df
 
 if __name__ == '__main__':
-    scrape_all_players()
+    print("main")
+    #scrape_all_players()
 
     #scrape_player_lists()
     # import pprint
