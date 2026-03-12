@@ -17,7 +17,8 @@ do I toss those out, or what? exclude to only players with > 500 minutes played 
 def get_career_stats():
     stats_path = kagglehub.dataset_download("sumitrodatta/nba-aba-baa-stats")
     advanced = pd.read_csv(stats_path + "/Advanced.csv")
-    medians = advanced.groupby('player')[['ows', 'dws', 'vorp', 'per']].median()
-    sums = advanced.groupby('player')[['g', 'mp']].sum() # number of games/minutes played
+    medians = advanced.groupby('player')[['vorp', 'per']].median()
+    # total number of games/minutes played/offensive win shares/defensive win shares
+    sums = advanced.groupby('player')[['g', 'mp', 'ows', 'dws']].sum() 
 
     return medians.merge(sums, left_on='player', right_on='player')

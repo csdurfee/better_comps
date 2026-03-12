@@ -11,6 +11,7 @@ import json
 import bs4 as bs
 import pandas as pd
 import numpy as np
+import unidecode
 
 import career_stats
 
@@ -204,34 +205,54 @@ def scrape_all_players():
             # sleep between server requests.
             time.sleep(SLEEP_TIME)
 
-def build_base_df():
+def get_player_files():
+    return glob.glob("scrape_cache/nbadraft_net/players/*.json")
+
+
+def build_base_df(get_text=False):
     """
     Loop through all player files in the players/ directory, and build a pandas 
     dataframe from the data.
     """
-    player_files = glob.glob("scrape_cache/nbadraft_net/players/*.json")
+    player_files = get_player_files()
 
     players_extracted = []
     for filename in player_files:
         player_name = get_name_from_filename(filename)
         with open(filename, "r") as f:
             json_data = json.load(f)
-            # these are lists, which make pandas mad if they are different lengths.
-            # I am preserving the raw HTML. but this is primarily for numerical analysis
-            del json_data['descr_other']
-            del json_data['descr_strengths']
-            del json_data['descr_weaknesses']
+            if not get_text:
+                del json_data['descr_other']
+                del json_data['descr_strengths']
+                del json_data['descr_weaknesses']
             json_data['Name'] = player_name
             players_extracted.append(json_data)
     df = pd.DataFrame(players_extracted)
 
     return df
 
-def build_df():
-    df = build_base_df()
-    stats = career_stats.get_career_stats()
+def build_df(get_text=False):
+    # need to do some magic to join on names with diacritics in them
+    # eg Šarūnas Marčiulionis
+    df = build_base_df(get_text)
+    df['Name_ascii'] = df.Name.map(unidecode.unidecode)
 
-    df = df.merge(stats, how='left', left_on="Name", right_on="player")
+    stats = pd.DataFrame(career_stats.get_career_stats()).reset_index()
+    stats['player_ascii'] = stats.player.map(unidecode.unidecode)
+
+    df = df.merge(stats, how='left', left_on="Name_ascii", right_on="player_ascii")
+
+    # pull in draft info
+    draft_data = load_players()
+    relevant = draft_data[['player', 'teamposition', 'year', 'rank']]
+
+    relevant = relevant.rename(columns={'teamposition': 'draft_position', 
+                                        'year': 'draft_year',
+                                        'rank': 'draft_order'})
+    
+    relevant['player_ascii'] = relevant.player.map(unidecode.unidecode)
+
+    df = df.merge(relevant, how='left', left_on="Name_ascii", right_on="player_ascii")
 
     # fix columns that should be numeric.
     # these appear to be all integer values.
