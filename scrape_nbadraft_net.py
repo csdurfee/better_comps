@@ -72,7 +72,10 @@ def save_players(player_data):
     players_df.to_json(get_player_list_file())
 
 def load_players():
-    return pd.read_json(get_player_list_file())
+    players = pd.read_json(get_player_list_file())
+    players.loc[players.player == 'Kenyon Martin', 'player'] = 'KJ Martin'
+    return players
+
 
 def scrape_player_lists(start=2009, end=2025):
     all_players = []
@@ -209,7 +212,7 @@ def get_player_files():
     return glob.glob("scrape_cache/nbadraft_net/players/*.json")
 
 
-def build_base_df(get_text=False):
+def load_evals(get_text=False):
     """
     Loop through all player files in the players/ directory, and build a pandas 
     dataframe from the data.
@@ -229,18 +232,21 @@ def build_base_df(get_text=False):
             players_extracted.append(json_data)
     df = pd.DataFrame(players_extracted)
 
+    # name collision for Kenyon Martin Jr., who goes by KJ Martin in the NBA
+    df.loc[df.Name=='Kenyon Martin', 'Name'] = 'KJ Martin'
+
     return df
 
 def build_df(get_text=False):
     # need to do some magic to join on names with diacritics in them
     # eg Šarūnas Marčiulionis
-    df = build_base_df(get_text)
+    df = load_evals(get_text)
     df['Name_ascii'] = df.Name.map(unidecode.unidecode)
 
-    stats = pd.DataFrame(career_stats.get_career_stats()).reset_index()
-    stats['player_ascii'] = stats.player.map(unidecode.unidecode)
+    cs = pd.DataFrame(career_stats.get_career_stats()).reset_index()
+    cs['player_ascii'] = cs.player.map(unidecode.unidecode)
 
-    df = df.merge(stats, how='left', left_on="Name_ascii", right_on="player_ascii")
+    df = df.merge(cs, how='left', left_on="Name_ascii", right_on="player_ascii")
 
     # pull in draft info
     draft_data = load_players()
