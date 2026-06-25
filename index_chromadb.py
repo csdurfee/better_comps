@@ -33,6 +33,7 @@ def index_clean(collection):
         
         # FIXME: need to match on the ASCii-fied version of the name, because diacritics
         #player = players[players.player == row.Name]
+
         base_metadata = {'player_name': row.player_name}
 
         # TODO: add position on the court for sharper comps?
@@ -40,17 +41,38 @@ def index_clean(collection):
 
         metadata = base_metadata.copy()
         metadata['feedback_type'] = 'strengths'
-        collection.add(
-            ids=[f"{row.player_name}-strengths"],
-            documents=[row.strengths],
-            metadatas=[metadata]
-        )
+
+        ids = []
+        documents = []
+        metadatas = []
+    
+        # try splitting up by bullet point
+        bullets = row.strengths.split("\n")
+        for counter, bullet in enumerate(bullets):
+            if len(bullet.strip()) > 0:
+                ids.append(f"{row.player_name}-strengths-{counter}")
+                documents.append(bullet)
+                metadatas.append(metadata)
+                # collection.add(
+                #     ids=[f"{row.player_name}-strengths-{counter}"],
+                #     documents=[bullet],
+                #     metadatas=[metadata]
+                # )
 
         metadata = base_metadata.copy()
         metadata['feedback_type'] = 'weaknesses'
-        collection.add(
-            ids=[f"{row.player_name}-weaknesses"],
-            documents=[row.weaknesses],
-            metadatas=[metadata]
-        )
+        
+        bullets = row.strengths.split("\n")
+        for counter, bullet in enumerate(bullets):
+            if len(bullet.strip()) > 0:
+                ids.append(f"{row.player_name}-weaknesses-{counter}")
+                documents.append(bullet)
+                metadatas.append(metadata)
+                # collection.add(
+                #     ids=[f"{row.player_name}-weaknesses-{counter}"],
+                #     documents=[bullet],
+                #     metadatas=[metadata]
+                # )
+        if len(ids) > 0:
+            collection.add(ids=ids, documents=documents, metadatas=metadatas)
         print(f"did {row.player_name}, elapsed {time.time() - _start}")
